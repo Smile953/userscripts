@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         FetLife Image Saver
 // @namespace    http://tampermonkey.net/
-// @version      1.5
-// @description  Fixed Save button that downloads the biggest visible image on FetLife.
+// @version      1.6
+// @description  Save button on each FetLife image (top right, below the 1/2 counter).
 // @author       Community
 // @match        https://fetlife.com/*
 // @match        https://*.fetlife.com/*
@@ -28,24 +28,6 @@
         return img.currentSrc || img.src;
     }
 
-    function bgUrl(el) {
-        const m = getComputedStyle(el).backgroundImage.match(/url\(["']?(.*?)["']?\)/);
-        return m ? m[1] : null;
-    }
-
-    function biggestVisible() {
-        let best = null, area = 0;
-        document.querySelectorAll('img, div, a, span, picture').forEach(el => {
-            const url = el.tagName === 'IMG' ? bestSrc(el) : bgUrl(el);
-            if (!url || url.startsWith('data:')) return;
-            const r = el.getBoundingClientRect();
-            if (r.bottom < 0 || r.top > innerHeight || r.width < 100 || r.height < 100) return;
-            const a = r.width * r.height;
-            if (a > area) { area = a; best = url; }
-        });
-        return best;
-    }
-
     const EXT = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/gif': 'gif', 'image/webp': 'webp', 'image/avif': 'avif' };
 
     function baseName(url) {
@@ -56,9 +38,29 @@
         }
     }
 
-    function flash(text) {
-        btn.textContent = text;
-        setTimeout(() => btn.textContent = '⬇ Save', 1500);
+    function saveUrl(src, b) {
+        const url = new URL(src, location.href).href;
+        console.log('[FLSaver] Fetching', url);
+        b.textContent = '…';
+        const done = t => { b.textContent = t; setTimeout(() => b.textContent = '⬇', 1500); };
+        GM_xmlhttpRequest({
+            method: 'GET',
+            url,
+            responseType: 'blob',
+            headers: { Referer: location.href },
+            onload: res => {
+                if (res.status !== 200 || !res.response) {
+                    console.log('[FLSaver] Bad response', res.status);
+                    return done('✗');
+                }
+                const type = (res.response.type || '').split(';')[0];
+                const name = baseName(url) + '.' + (EXT[type] || 'jpg');
+                saveBlob(res.response, name);
+                console.log('[FLSaver] Saved', name);
+                done('✓');
+            },
+            onerror: err => { console.log('[FLSaver] Request failed', err); done('✗'); }
+        });
     }
 
     function saveBlob(blob, name) {
@@ -72,58 +74,43 @@
         setTimeout(() => URL.revokeObjectURL(href), 5000);
     }
 
-    const btn = document.createElement('button');
-    btn.textContent = '⬇ Save';
-    Object.assign(btn.style, {
-        position: 'fixed', bottom: '20px', right: '20px', zIndex: 2147483647,
-        padding: '10px 14px', borderRadius: '8px', border: 'none',
-        background: '#c00', color: '#fff', font: 'bold 14px sans-serif',
-        cursor: 'pointer', boxShadow: '0 2px 8px rgba(0,0,0,0.5)'
-    });
-
-    btn.addEventListener('click', e => {
-        e.preventDefault();
-        e.stopPropagation();
-        const src = biggestVisible();
-        if (!src) { console.log('[FLSaver] No image found'); flash('No image'); return; }
-        const url = new URL(src, location.href).href;
-        console.log('[FLSaver] Fetching', url);
-        btn.textContent = '…';
-
-        GM_xmlhttpRequest({
-            method: 'GET',
-            url,
-            responseType: 'blob',
-            headers: { Referer: location.href },
-            onload: res => {
-                if (res.status !== 200 || !res.response) {
-                    console.log('[FLSaver] Bad response', res.status);
-                    flash('Failed');
-                    return;
-                }
-                const type = (res.response.type || '').split(';')[0];
-                const name = baseName(url) + '.' + (EXT[type] || 'jpg');
-                saveBlob(res.response, name);
-                console.log('[FLSaver] Saved', name);
-                flash('✓ Saved');
-            },
-            onerror: err => {
-                console.log('[FLSaver] Request failed', err);
-                flash('Failed');
-            }
+    function makeBtn(img) {
+        const b = document.createElement('button');
+        b.className = 'flsaver-btn';
+        b.textContent = '⬇';
+        b.title = 'Save image';
+        Object.assign(b.style, {
+            position: 'absolute', top: '60px', right: '16px', zIndex: 2147483647,
+            width: '40px', height: '40px', borderRadius: '50%', border: 'none',
+            background: 'rgba(204,0,0,0.9)', color: '#fff', font: 'bold 18px sans-serif',
+            cursor: 'pointer', boxShadow: '0 2px 8px rgba(0,0,0,0.5)', padding: '0', lineHeight: '40px'
         });
-    }, true);
-
-    btn.id = 'flsaver-btn';
-    function ensureBtn() {
-        if (!document.body) return;
-        if (!document.body.contains(btn)) {
-            document.body.appendChild(btn);
-            console.log('[FLSaver] Button (re)attached');
-        }
+        ['click', 'mousedown', 'pointerdown', 'mouseup', 'pointerup'].forEach(ev =>
+            b.addEventListener(ev, e => { e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation(); }, true));
+        b.addEventListener('click', () => {
+            const src = bestSrc(img);
+            if (!src || src.startsWith('data:')) { console.log('[FLSaver] No src'); return; }
+            saveUrl(src, b);
+        }, true);
+        return b;
     }
-    ensureBtn();
-    new MutationObserver(ensureBtn).observe(document.documentElement, { childList: true, subtree: true });
-    setInterval(ensureBtn, 1500);
-    console.log('[FLSaver] Loaded v1.5');
+
+    function scan() {
+        document.querySelectorAll('img').forEach(img => {
+            const r = img.getBoundingClientRect();
+            if (r.width < 200 || r.height < 200) return;
+            const host = img.parentElement;
+            if (!host) return;
+            if (host.querySelector(':scope > .flsaver-btn')) return;
+            if (getComputedStyle(host).position === 'static') host.style.position = 'relative';
+            host.appendChild(makeBtn(img));
+            console.log('[FLSaver] Button added', bestSrc(img));
+        });
+    }
+
+    scan();
+    new MutationObserver(() => { clearTimeout(scan.t); scan.t = setTimeout(scan, 200); })
+        .observe(document.documentElement, { childList: true, subtree: true });
+    setInterval(scan, 2000);
+    console.log('[FLSaver] Loaded v1.6');
 })();
