@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         FetLife Image Saver
 // @namespace    http://tampermonkey.net/
-// @version      1.6
+// @version      1.7
 // @description  Save button on each FetLife image (top right, below the 1/2 counter).
 // @author       Community
 // @match        https://fetlife.com/*
@@ -85,9 +85,13 @@
             background: 'rgba(204,0,0,0.9)', color: '#fff', font: 'bold 18px sans-serif',
             cursor: 'pointer', boxShadow: '0 2px 8px rgba(0,0,0,0.5)', padding: '0', lineHeight: '40px'
         });
-        ['click', 'mousedown', 'pointerdown', 'mouseup', 'pointerup'].forEach(ev =>
-            b.addEventListener(ev, e => { e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation(); }, true));
-        b.addEventListener('click', () => {
+        ['mousedown', 'pointerdown', 'mouseup', 'pointerup'].forEach(ev =>
+            b.addEventListener(ev, e => { e.preventDefault(); e.stopPropagation(); }, true));
+        b.addEventListener('click', e => {
+            e.preventDefault();
+            e.stopPropagation();
+            e.stopImmediatePropagation();
+            console.log('[FLSaver] Click');
             const src = bestSrc(img);
             if (!src || src.startsWith('data:')) { console.log('[FLSaver] No src'); return; }
             saveUrl(src, b);
@@ -112,5 +116,5 @@
     new MutationObserver(() => { clearTimeout(scan.t); scan.t = setTimeout(scan, 200); })
         .observe(document.documentElement, { childList: true, subtree: true });
     setInterval(scan, 2000);
-    console.log('[FLSaver] Loaded v1.6');
+    console.log('[FLSaver] Loaded v1.7');
 })();
