@@ -1,7 +1,7 @@
 // ==UserScript==
-// @name         InterConnect Datastore GB + Free %
+// @name         0. InterConnect Datastore GB + Free %
 // @namespace    violentmonkey
-// @version      1.4
+// @version      1.5
 // @match        https://vcenter01.hosting.interconnect.nl/folder*
 // @grant        none
 // @updateURL    https://raw.githubusercontent.com/Smile953/userscripts/main/interconnect-datastore.user.js
