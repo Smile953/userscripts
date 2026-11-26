@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         FetLife Image Saver
 // @namespace    http://tampermonkey.net/
-// @version      1.8
+// @version      1.9
 // @description  Save button on each FetLife image (top right, below the 1/2 counter).
 // @author       Community
 // @match        https://fetlife.com/*
@@ -30,15 +30,29 @@
 
     const EXT = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/gif': 'gif', 'image/webp': 'webp', 'image/avif': 'avif' };
 
-    function baseName(url) {
-        try {
-            return 'fetlife_' + (new URL(url).pathname.split('/').pop() || Date.now());
-        } catch (e) {
-            return 'fetlife_' + Date.now();
+    const RESERVED = ['users', 'pictures', 'posts', 'home', 'explore', 'groups', 'events', 'videos', 'writings', 'conversations', 'inbox', 'settings', 'search', 'p', 'fetishes', 'places', 'notifications'];
+    const clean = t => (t || '').trim().replace(/^@/, '').replace(/[^\w.-]+/g, '_').slice(0, 40);
+
+    function profileName(img) {
+        const seg = location.pathname.split('/').filter(Boolean)[0] || '';
+        if (seg && !RESERVED.includes(seg.toLowerCase())) return clean(seg);
+        let node = img;
+        for (let i = 0; i < 15 && node; i++, node = node.parentElement) {
+            const links = node.querySelectorAll ? node.querySelectorAll('a[href]') : [];
+            for (const l of links) {
+                const m = (l.getAttribute('href') || '').replace(/^https?:\/\/[^/]*fetlife\.com/, '').match(/^\/([A-Za-z0-9_-]+)\/?$/);
+                if (m && !RESERVED.includes(m[1].toLowerCase())) return clean(m[1]);
+            }
         }
+        return 'unknown';
     }
 
-    function saveUrl(src, b) {
+    function baseName(img) {
+        const rnd = Math.floor(Math.random() * 1e8).toString().padStart(8, '0');
+        return 'fetlife_' + profileName(img) + '_' + rnd;
+    }
+
+    function saveUrl(src, b, img) {
         const url = new URL(src, location.href).href;
         console.log('[FLSaver] Fetching', url);
         b.textContent = '…';
@@ -54,7 +68,7 @@
                     return done('✗');
                 }
                 const type = (res.response.type || '').split(';')[0];
-                const name = baseName(url) + '.' + (EXT[type] || 'jpg');
+                const name = baseName(img) + '.' + (EXT[type] || 'jpg');
                 saveBlob(res.response, name);
                 console.log('[FLSaver] Saved', name);
                 done('✓');
@@ -94,7 +108,7 @@
             console.log('[FLSaver] Click');
             const src = bestSrc(img);
             if (!src || src.startsWith('data:')) { console.log('[FLSaver] No src'); return; }
-            saveUrl(src, b);
+            saveUrl(src, b, img);
         }, true);
         return b;
     }
@@ -125,5 +139,5 @@
     new MutationObserver(() => { clearTimeout(scan.t); scan.t = setTimeout(scan, 200); })
         .observe(document.documentElement, { childList: true, subtree: true });
     setInterval(scan, 2000);
-    console.log('[FLSaver] Loaded v1.8');
+    console.log('[FLSaver] Loaded v1.9');
 })();

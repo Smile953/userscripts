@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         X Video Downloader
 // @namespace    http://tampermonkey.net/
-// @version      1.3
+// @version      1.4
 // @description  Adds a download button on X videos and saves the highest-quality MP4 (page hook + API fallback).
 // @author       Community
 // @match        https://x.com/*
@@ -24,7 +24,7 @@
 (function () {
     'use strict';
 
-    const VERSION = '1.3';
+    const VERSION = '1.4';
     const byMedia = new Map(); // mediaId -> mp4 url
     const byTweet = new Map(); // tweetId -> mp4 url
     const BEARER = 'AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs%3D1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA';
@@ -566,13 +566,29 @@
         setTimeout(() => URL.revokeObjectURL(href), 5000);
     }
 
-    function fileName(info) {
-        const id = info.tweetId || info.mediaId || Date.now();
-        return 'x-' + id + '.mp4';
+    function userFor(video, tweetId) {
+        const re = /^\/([A-Za-z0-9_]{1,15})\/status\/(\d+)/;
+        let node = video;
+        for (let i = 0; i < 25 && node; i++, node = node.parentElement) {
+            const links = node.querySelectorAll ? node.querySelectorAll('a[href*="/status/"]') : [];
+            for (const a of links) {
+                const m = (a.getAttribute('href') || '').match(re);
+                if (m && (!tweetId || m[2] === String(tweetId))) return m[1];
+            }
+        }
+        const m = location.pathname.match(re);
+        if (m) return m[1];
+        return 'unknown';
     }
 
-    function download(btn, info) {
-        const name = fileName(info);
+    function fileName(info, video) {
+        const id = info.tweetId || info.mediaId || Date.now();
+        const user = info.user || (video ? userFor(video, info.tweetId) : 'unknown');
+        return 'x_' + user + '_' + id + '.mp4';
+    }
+
+    function download(btn, info, video) {
+        const name = fileName(info, video);
         btn.textContent = '…';
         console.log('[XVid] Fetching', info.url, 'as', name);
         return gmRequest({
@@ -626,7 +642,7 @@
                         let info = urlFor(video);
                         if (!info) info = await resolveUrl(video);
                         if (!info) { flash(btn, '?'); return; }
-                        await download(btn, info);
+                        await download(btn, info, video);
                     } catch (err) {
                         console.log('[XVid] Click handler error', err);
                         flash(btn, '✗');
