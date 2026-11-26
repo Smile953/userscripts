@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         FetLife Image Saver
 // @namespace    http://tampermonkey.net/
-// @version      1.4
+// @version      1.5
 // @description  Fixed Save button that downloads the biggest visible image on FetLife.
 // @author       Community
 // @match        https://fetlife.com/*
@@ -114,6 +114,16 @@
         });
     }, true);
 
-    (document.body || document.documentElement).appendChild(btn);
-    console.log('[FLSaver] Loaded v1.4');
+    btn.id = 'flsaver-btn';
+    function ensureBtn() {
+        if (!document.body) return;
+        if (!document.body.contains(btn)) {
+            document.body.appendChild(btn);
+            console.log('[FLSaver] Button (re)attached');
+        }
+    }
+    ensureBtn();
+    new MutationObserver(ensureBtn).observe(document.documentElement, { childList: true, subtree: true });
+    setInterval(ensureBtn, 1500);
+    console.log('[FLSaver] Loaded v1.5');
 })();
