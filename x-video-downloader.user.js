@@ -1,14 +1,15 @@
 // ==UserScript==
 // @name         X Video Downloader
 // @namespace    http://tampermonkey.net/
-// @version      1.4
-// @description  Adds a download button on X videos and saves the highest-quality MP4 (page hook + API fallback).
+// @version      1.5
+// @description  Adds a download button on X videos and images and saves the highest-quality file (page hook + API fallback; images as orig).
 // @author       Community
 // @match        https://x.com/*
 // @match        https://twitter.com/*
 // @grant        GM_xmlhttpRequest
 // @grant        unsafeWindow
 // @connect      video.twimg.com
+// @connect      pbs.twimg.com
 // @connect      cdn.syndication.twimg.com
 // @connect      api.x.com
 // @connect      api.twitter.com
@@ -24,7 +25,7 @@
 (function () {
     'use strict';
 
-    const VERSION = '1.4';
+    const VERSION = '1.5';
     const byMedia = new Map(); // mediaId -> mp4 url
     const byTweet = new Map(); // tweetId -> mp4 url
     const BEARER = 'AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs%3D1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA';
@@ -656,10 +657,187 @@
         });
     }
 
+    // ---- 6. Button on each post image ----
+    function isPostImage(img) {
+        const src = img.currentSrc || img.src || '';
+        if (!/pbs\.twimg\.com\/media\//.test(src)) return false;
+        if (img.closest('[data-testid="card.wrapper"], [data-testid="card.layoutLarge.media"], [data-testid="card.layoutSmall.media"]')) return false;
+        return true;
+    }
+
+    function imageHost(img) {
+        const photo = img.closest('[data-testid="tweetPhoto"]');
+        if (photo) return photo;
+        const link = img.closest('a[href*="/photo/"]');
+        if (link) return link;
+        return img.parentElement;
+    }
+
+    function origImageUrls(src) {
+        let url;
+        try { url = new URL(src, location.href); } catch (e) { return null; }
+        if (!/pbs\.twimg\.com$/i.test(url.hostname)) return null;
+        const m = url.pathname.match(/\/media\/([^/]+)/);
+        if (!m) return null;
+        let id = decodeURIComponent(m[1]);
+        let fmt = url.searchParams.get('format');
+        const extM = id.match(/^(.+?)\.(jpe?g|png|webp|gif)(?::[A-Za-z0-9_]+)?$/i);
+        if (extM) {
+            if (!fmt) fmt = extM[2].toLowerCase();
+            id = extM[1];
+        }
+        if (!fmt) fmt = 'jpg';
+        fmt = String(fmt).toLowerCase();
+        if (fmt === 'jpeg') fmt = 'jpg';
+        const base = 'https://pbs.twimg.com/media/' + id + '?format=' + encodeURIComponent(fmt);
+        return {
+            orig: base + '&name=orig',
+            large: base + '&name=large',
+            fmt: fmt
+        };
+    }
+
+    function photoIndex(img) {
+        const link = img.closest('a[href*="/photo/"]');
+        if (link) {
+            const hm = (link.getAttribute('href') || '').match(/\/photo\/(\d+)/);
+            if (hm) return parseInt(hm[1], 10);
+        }
+        let node = img;
+        for (let i = 0; i < 12 && node; i++, node = node.parentElement) {
+            if (node.getAttribute) {
+                const href = node.getAttribute('href') || '';
+                const hm = href.match(/\/photo\/(\d+)/);
+                if (hm) return parseInt(hm[1], 10);
+            }
+        }
+        const pageM = location.pathname.match(/\/status\/\d+\/photo\/(\d+)/);
+        if (pageM) return parseInt(pageM[1], 10);
+        const article = img.closest('article') || img.closest('[data-testid="tweet"]');
+        if (article) {
+            const imgs = [...article.querySelectorAll('img')].filter(isPostImage);
+            const idx = imgs.indexOf(img);
+            if (idx >= 0) return idx + 1;
+        }
+        return 1;
+    }
+
+    function imageFileName(img, fmt) {
+        const tids = tweetIdNear(img);
+        const tweetId = tids[0] || 'unknown';
+        const user = userFor(img, tids[0]);
+        const n = photoIndex(img);
+        const ext = fmt || 'jpg';
+        return 'x_' + user + '_' + tweetId + '_' + n + '.' + ext;
+    }
+
+    async function downloadImage(btn, img) {
+        const built = origImageUrls(img.currentSrc || img.src || '');
+        if (!built) {
+            console.log('[XDL] Could not build orig URL', img.currentSrc || img.src);
+            flash(btn, '?');
+            return;
+        }
+        const name = imageFileName(img, built.fmt);
+        console.log('[XDL] Fetching', built.orig, 'as', name);
+
+        async function tryFetch(url) {
+            const res = await gmRequest({
+                method: 'GET',
+                url: url,
+                responseType: 'blob',
+                timeout: 120000
+            });
+            if (res.status === 200 && res.response && (res.response.size === undefined || res.response.size > 0)) {
+                return res.response;
+            }
+            console.log('[XDL] Bad response', res.status, 'for', url);
+            return null;
+        }
+
+        let blob = await tryFetch(built.orig);
+        if (!blob) {
+            console.log('[XDL] orig failed, falling back to large');
+            blob = await tryFetch(built.large);
+        }
+        if (!blob) {
+            flash(btn, '✗');
+            return;
+        }
+        saveBlob(blob, name);
+        console.log('[XDL] image saved', name);
+        flash(btn, '✓');
+    }
+
+    const imgButtons = new WeakMap();
+
+    function addImageButtons() {
+        document.querySelectorAll('img').forEach(img => {
+            if (!isPostImage(img)) return;
+            const existing = imgButtons.get(img);
+            if (existing && existing.isConnected) return;
+            const host = imageHost(img);
+            if (!host) return;
+            const hostBtn = host.querySelector(':scope > [data-xvid-img-btn]');
+            const postImgsInHost = [...host.querySelectorAll('img')].filter(isPostImage);
+            if (hostBtn && hostBtn.isConnected && postImgsInHost.length <= 1) {
+                imgButtons.set(img, hostBtn);
+                img.dataset.xvidImg = '1';
+                return;
+            }
+            img.dataset.xvidImg = '1';
+            if (getComputedStyle(host).position === 'static') host.style.position = 'relative';
+
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.textContent = '⬇';
+            btn.title = 'Download image';
+            btn.setAttribute('data-xvid-img-btn', '1');
+            Object.assign(btn.style, {
+                position: 'absolute', top: '8px', right: '8px', zIndex: 10000,
+                width: '34px', height: '34px', borderRadius: '9999px', border: 'none',
+                background: 'rgba(0,0,0,0.65)', color: '#fff', fontSize: '17px',
+                cursor: 'pointer', pointerEvents: 'auto'
+            });
+            ['pointerdown', 'mousedown', 'mouseup'].forEach(ev =>
+                btn.addEventListener(ev, e => e.stopPropagation(), true));
+            btn.addEventListener('click', e => {
+                e.preventDefault();
+                e.stopPropagation();
+                if (btn.dataset.busy) return;
+                btn.dataset.busy = '1';
+                btn.textContent = '…';
+                Promise.resolve(downloadImage(btn, img))
+                    .catch(err => {
+                        console.log('[XDL] Click handler error', err);
+                        flash(btn, '✗');
+                    })
+                    .finally(() => { delete btn.dataset.busy; });
+            }, true);
+            host.appendChild(btn);
+            imgButtons.set(img, btn);
+            console.log('[XDL] image button added');
+        });
+    }
+
+    let imgScanTimer = 0;
+    function scheduleImageButtons() {
+        clearTimeout(imgScanTimer);
+        imgScanTimer = setTimeout(addImageButtons, 200);
+    }
+
     function start() {
         new MutationObserver(addButtons).observe(document.body, { childList: true, subtree: true });
+        new MutationObserver(scheduleImageButtons).observe(document.body, {
+            childList: true,
+            subtree: true,
+            attributes: true,
+            attributeFilter: ['src']
+        });
         addButtons();
+        addImageButtons();
         console.log('[XVid] Loaded v' + VERSION);
+        console.log('[XDL] Loaded v' + VERSION);
     }
     if (document.body) start();
     else document.addEventListener('DOMContentLoaded', start);
